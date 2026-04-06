@@ -5,23 +5,15 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-app.use(cors({
-  origin: [
-    "http://localhost:5173",
-    "https://ai-horizon-buzzer.vercel.app"
-  ],
-  credentials: true
-}));
+// Allow all origins in dev so mobile devices on the same network can connect
+app.use(cors({ origin: true, credentials: true }));
 
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  path: "/socket.io",   // 👈 add this
+  path: "/socket.io",
   cors: {
-    origin: [
-      "http://localhost:5173",
-      "https://ai-horizon-buzzer.vercel.app"
-    ],
+    origin: true,   // allow any origin (local network IPs, etc.)
     methods: ["GET", "POST"],
     credentials: true
   }
@@ -32,7 +24,9 @@ let gameState = 'WAITING'; // 'WAITING', 'OPEN', 'FINISHED'
 let roundStartTime = 0;
 let buzzes = []; // { socketId, reactionTimeMs, user, option }
 let options = []; // string[] eg ['1','2','3','4']
-let hostSocketId = null;
+let correctOption = null; // The option admin marks as correct
+let hostSocketId = null;  // current socket.id of the host
+let hostUserId = null;    // stable user UUID of the host (survives reconnects)
 
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
@@ -58,10 +52,11 @@ io.on('connection', (socket) => {
 
     if (username === envUser && password === envPass) {
       hostSocketId = socket.id;
+      hostUserId = id;
       users[socket.id] = { id, name: 'Admin', isHost: true };
       
       io.emit('users_update', Object.values(users));
-      socket.emit('game_state', { gameState, buzzes, options });
+      socket.emit('game_state', { gameState, buzzes, options, correctOption });
       socket.emit('admin_success');
     } else {
       socket.emit('admin_error', 'Invalid credentials');
@@ -72,10 +67,11 @@ io.on('connection', (socket) => {
   socket.on('admin_reconnect', (data) => {
     const { id } = data;
     hostSocketId = socket.id;
+    hostUserId = id;
     users[socket.id] = { id, name: 'Admin', isHost: true };
     
     io.emit('users_update', Object.values(users));
-    socket.emit('game_state', { gameState, buzzes, options });
+    socket.emit('game_state', { gameState, buzzes, options, correctOption });
     socket.emit('admin_success');
   });
 
@@ -87,9 +83,57 @@ io.on('connection', (socket) => {
     roundStartTime = Date.now();
     buzzes = [];
     options = data?.options || [];
+    correctOption = null;
 
-    io.emit('game_state', { gameState, buzzes, options });
+    io.emit('game_state', { gameState, buzzes, options, correctOption });
     io.emit('round_started');
+  });
+
+  // Helper: is this socket the host?
+  const isHost = () => socket.id === hostSocketId || users[socket.id]?.isHost === true;
+
+  // Host: Mark Correct Option
+  socket.on('set_correct_option', (data) => {
+    if (!isHost()) return;
+    correctOption = data?.option ?? null;
+    console.log(`[set_correct_option] correctOption = ${correctOption}`);
+    socket.emit('correct_option_set', { correctOption });
+  });
+
+  // Host: Reveal Winner
+  socket.on('reveal_winner', () => {
+    console.log(`[reveal_winner] called by socket=${socket.id}, hostSocketId=${hostSocketId}, isHost=${isHost()}`);
+    if (!isHost()) {
+      console.warn('[reveal_winner] REJECTED — not host');
+      return;
+    }
+    
+    let winner = null;
+    if (correctOption !== null) {
+      // Find fastest buzz on the correct option
+      const correctBuzzes = buzzes.filter(b => b.option === correctOption);
+      console.log(`[reveal_winner] correctOption=${correctOption}, correctBuzzes=${correctBuzzes.length}, allBuzzes=${buzzes.length}`);
+      if (correctBuzzes.length > 0) {
+        winner = correctBuzzes.reduce((prev, curr) =>
+          prev.reactionTimeMs < curr.reactionTimeMs ? prev : curr
+        );
+      }
+    } else {
+      // No correct option defined — fastest overall
+      console.log(`[reveal_winner] no correctOption set, using fastest overall from ${buzzes.length} buzzes`);
+      if (buzzes.length > 0) {
+        winner = buzzes.reduce((prev, curr) =>
+          prev.reactionTimeMs < curr.reactionTimeMs ? prev : curr
+        );
+      }
+    }
+
+    const payload = {
+      winner: winner ? { name: winner.user.name, id: winner.user.id, reactionTimeMs: winner.reactionTimeMs, option: winner.option } : null,
+      correctOption
+    };
+    console.log(`[reveal_winner] broadcasting winner_reveal:`, JSON.stringify(payload));
+    io.emit('winner_reveal', payload);
   });
 
   // Player: Buzz In
@@ -126,8 +170,10 @@ io.on('connection', (socket) => {
     buzzes = [];
     roundStartTime = 0;
     options = [];
+    correctOption = null;
 
-    io.emit('game_state', { gameState, buzzes, options });
+    io.emit('game_state', { gameState, buzzes, options, correctOption });
+    io.emit('winner_reveal', null); // Clear winner modal on all clients
   });
 
   socket.on('disconnect', () => {
