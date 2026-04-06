@@ -5,17 +5,27 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: [
+    "http://localhost:5173",
+    "https://ai-horizon-buzzer.vercel.app"
+  ],
+  credentials: true
+}));
 
 const server = http.createServer(app);
 
 const io = new Server(server, {
+  path: "/socket.io",   // 👈 add this
   cors: {
-    origin: "*", // Allows any origin, fine for local development
-    methods: ["GET", "POST"]
+    origin: [
+      "http://localhost:5173",
+      "https://ai-horizon-buzzer.vercel.app"
+    ],
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
-
 // App State
 let users = {}; // socket.id -> { id, name, isHost }
 let gameState = 'WAITING'; // 'WAITING', 'OPEN', 'FINISHED'
@@ -136,6 +146,6 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server listening on port ${PORT}`);
 });
