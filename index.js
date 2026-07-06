@@ -36,6 +36,9 @@ io.on('connection', (socket) => {
     const { id, name } = data;
     
     users[socket.id] = { id, name, isHost: false };
+    
+    const userCount = Object.keys(users).length;
+    console.log(`[USER_JOINED] Name: ${name}, ID: ${id}, Total Users: ${userCount}`);
 
     // Broadcast updated user list
     io.emit('users_update', Object.values(users));
@@ -55,10 +58,13 @@ io.on('connection', (socket) => {
       hostUserId = id;
       users[socket.id] = { id, name: 'Admin', isHost: true };
       
+      console.log(`[ADMIN_LOGIN] Host connected. ID: ${id}`);
+      
       io.emit('users_update', Object.values(users));
       socket.emit('game_state', { gameState, buzzes, options, correctOption });
       socket.emit('admin_success');
     } else {
+      console.log(`[ADMIN_FAILED] Failed login attempt for username: ${username}`);
       socket.emit('admin_error', 'Invalid credentials');
     }
   });
@@ -69,6 +75,7 @@ io.on('connection', (socket) => {
     hostSocketId = socket.id;
     hostUserId = id;
     users[socket.id] = { id, name: 'Admin', isHost: true };
+    console.log(`[ADMIN_RECONNECT] Host reconnected. ID: ${id}`);
     
     io.emit('users_update', Object.values(users));
     socket.emit('game_state', { gameState, buzzes, options, correctOption });
@@ -84,6 +91,8 @@ io.on('connection', (socket) => {
     buzzes = [];
     options = data?.options || [];
     correctOption = null;
+
+    console.log(`[ROUND_STARTED] Options: [${options.join(', ')}], Start Time: ${new Date(roundStartTime).toISOString()}`);
 
     io.emit('game_state', { gameState, buzzes, options, correctOption });
     io.emit('round_started');
@@ -132,7 +141,16 @@ io.on('connection', (socket) => {
       winner: winner ? { name: winner.user.name, id: winner.user.id, reactionTimeMs: winner.reactionTimeMs, option: winner.option } : null,
       correctOption
     };
-    console.log(`[reveal_winner] broadcasting winner_reveal:`, JSON.stringify(payload));
+    
+    console.log(`[REVEAL_WINNER] Result:`, JSON.stringify(payload, null, 2));
+    if (buzzes.length > 0) {
+      console.log(`[REVEAL_RANKINGS] Full list of buzzes:`);
+      const sorted = [...buzzes].sort((a,b) => a.reactionTimeMs - b.reactionTimeMs);
+      sorted.forEach((b, idx) => {
+        console.log(`  #${idx+1}: ${b.user.name} (${b.user.id}) - Time: ${b.reactionTimeMs}ms, Option: ${b.option || 'N/A'}`);
+      });
+    }
+
     io.emit('winner_reveal', payload);
   });
 
@@ -158,6 +176,8 @@ io.on('connection', (socket) => {
       option
     });
 
+    console.log(`[BUZZ_EVENT] User: ${user.name} (${user.id}), Time: ${reactionTimeMs}ms, Option: ${option || 'N/A'}`);
+
     // Broadcast the new buzz immediately
     io.emit('game_state', { gameState, buzzes, options });
   });
@@ -172,18 +192,27 @@ io.on('connection', (socket) => {
     options = [];
     correctOption = null;
 
+    console.log(`[ROUND_RESET] Game cleared by host.`);
+
     io.emit('game_state', { gameState, buzzes, options, correctOption });
     io.emit('winner_reveal', null); // Clear winner modal on all clients
   });
 
   socket.on('disconnect', () => {
-    console.log(`User disconnected: ${socket.id}`);
-    
+    const user = users[socket.id];
     const wasHost = socket.id === hostSocketId;
+    
+    if (user) {
+      console.log(`[USER_DISCONNECTED] Name: ${user.name}, ID: ${user.id}`);
+    } else {
+      console.log(`[SOCKET_DISCONNECTED] ID: ${socket.id}`);
+    }
+
     delete users[socket.id];
     
     if (wasHost) {
       hostSocketId = null;
+      console.log(`[ADMIN_DISCONNECTED] Host has left.`);
     }
 
     // Broadcast updated user list
