@@ -27,6 +27,7 @@ let options = []; // string[] eg ['1','2','3','4']
 let correctOption = null; // The option admin marks as correct
 let hostSocketId = null;  // current socket.id of the host
 let hostUserId = null;    // stable user UUID of the host (survives reconnects)
+let lastWinnerReveal = null; // latest winner reveal payload for new TV clients
 
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
@@ -44,7 +45,21 @@ io.on('connection', (socket) => {
     io.emit('users_update', Object.values(users));
     
     // Send current game state to new user
-    socket.emit('game_state', { gameState, buzzes, options });
+    socket.emit('users_update', Object.values(users));
+    socket.emit('game_state', { gameState, buzzes, options, correctOption });
+    if (lastWinnerReveal) {
+      socket.emit('winner_reveal', lastWinnerReveal);
+    }
+  });
+
+  // Register TV client for live state updates
+  socket.on('tv_register', () => {
+    console.log(`[TV_REGISTER] TV client connected: ${socket.id}`);
+    socket.emit('game_state', { gameState, buzzes, options, correctOption });
+    socket.emit('users_update', Object.values(users));
+    if (lastWinnerReveal) {
+      socket.emit('winner_reveal', lastWinnerReveal);
+    }
   });
 
   // Admin login
@@ -61,7 +76,11 @@ io.on('connection', (socket) => {
       console.log(`[ADMIN_LOGIN] Host connected. ID: ${id}`);
       
       io.emit('users_update', Object.values(users));
+      socket.emit('users_update', Object.values(users));
       socket.emit('game_state', { gameState, buzzes, options, correctOption });
+      if (lastWinnerReveal) {
+        socket.emit('winner_reveal', lastWinnerReveal);
+      }
       socket.emit('admin_success');
     } else {
       console.log(`[ADMIN_FAILED] Failed login attempt for username: ${username}`);
@@ -78,7 +97,11 @@ io.on('connection', (socket) => {
     console.log(`[ADMIN_RECONNECT] Host reconnected. ID: ${id}`);
     
     io.emit('users_update', Object.values(users));
+    socket.emit('users_update', Object.values(users));
     socket.emit('game_state', { gameState, buzzes, options, correctOption });
+    if (lastWinnerReveal) {
+      socket.emit('winner_reveal', lastWinnerReveal);
+    }
     socket.emit('admin_success');
   });
 
@@ -141,6 +164,7 @@ io.on('connection', (socket) => {
       winner: winner ? { name: winner.user.name, id: winner.user.id, reactionTimeMs: winner.reactionTimeMs, option: winner.option } : null,
       correctOption
     };
+    lastWinnerReveal = payload;
     
     console.log(`[REVEAL_WINNER] Result:`, JSON.stringify(payload, null, 2));
     if (buzzes.length > 0) {
@@ -191,6 +215,7 @@ io.on('connection', (socket) => {
     roundStartTime = 0;
     options = [];
     correctOption = null;
+    lastWinnerReveal = null;
 
     console.log(`[ROUND_RESET] Game cleared by host.`);
 
